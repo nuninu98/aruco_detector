@@ -14,6 +14,7 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <geometry_msgs/TransformStamped.h>
 #include <Eigen/Dense>
+#include <unordered_map>
 using namespace std;
 
 class ArucoDetector{
@@ -23,6 +24,7 @@ class ArucoDetector{
         ros::Subscriber sub_image_;
         ros::CallbackQueue queue_;
         ros::AsyncSpinner spinner_;
+        unordered_map<int, pair<double, Eigen::Matrix4d>> marker_info_map_;
         void imageCallback(const sensor_msgs::ImageConstPtr& image);
 
         cv::Mat camera_matrix_; 

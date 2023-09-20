@@ -2,7 +2,7 @@
 
 using namespace std;
 
-ArucoDetector::ArucoDetector(): queue_(), spinner_(0, &queue_), search_id_(0){
+ArucoDetector::ArucoDetector(): queue_(), spinner_(0, &queue_){
     nh_.setCallbackQueue(&queue_);
     sub_image_ = nh_.subscribe("camera/color/image_raw", 1, &ArucoDetector::imageCallback, this);
     spinner_.start();
@@ -18,6 +18,10 @@ ArucoDetector::ArucoDetector(): queue_(), spinner_(0, &queue_), search_id_(0){
     distortion_.at<float>(0, 1) = -0.264373;
     distortion_.at<float>(0, 2) = -0.005782;
     distortion_.at<float>(0, 3) = 0.002051;
+
+    marker_info_map_.insert(make_pair(0, make_pair(0.1, Eigen::Matrix4d::Identity())));
+    marker_info_map_.insert(make_pair(1, make_pair(0.05, Eigen::Matrix4d::Identity())));
+    marker_info_map_.insert(make_pair(2, make_pair(0.05, Eigen::Matrix4d::Identity())));
     
     cout<<"CAMERA MAT: "<<camera_matrix_<<endl;
     cout<<"DISTORTION: "<<distortion_<<endl;
@@ -37,12 +41,12 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
     cv::aruco::detectMarkers(image_mat, dict, marker_corners, marker_ids, param, rejected_candidates);
     cv::Mat detected_show = image_mat.clone();
     for(size_t i = 0; i < marker_ids.size(); i++){
-        if(marker_ids[i] == search_id_){
-            target_id.push_back(search_id_);
+        if(marker_info_map_.find(marker_ids[i]) != marker_info_map_.end()){
+            target_id.push_back(marker_ids[i]);
             target_corner.push_back(marker_corners[i]);
         }
     }
-    if(target_corner.size() != 1){
+    if(target_corner.empty()){
         // if(target_corner.empty()){
         //     ROS_WARN_THROTTLE(1.0, "Tag ID "<< to_string(search_id_)<<" is not found");
         // }
@@ -52,44 +56,46 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
         return;
     }
     cv::aruco::drawDetectedMarkers(detected_show, target_corner, target_id);
-    double marker_length = 0.1;
-    vector<cv::Vec3d> v_rotation, v_translation;
-    cv::aruco::estimatePoseSingleMarkers(target_corner, marker_length, camera_matrix_, distortion_, v_rotation, v_translation);
-    // cout<<"RVEC: \n"<<v_rotation[0]<<endl;
-    // cout<<"TVEC: \n"<<v_translation[0]<<endl;
-    cv::Mat rotation_mat;
-    Eigen::Matrix4d pose_se3 = Eigen::Matrix4d::Identity();
-    cv::Rodrigues(v_rotation[0], rotation_mat);
-    // cout<<"ROTATION: \n"<<rotation_mat<<endl;
-    // cout<<endl;
-    cout<<"DISTANCE: "<<sqrt(v_translation[0].dot(v_translation[0]))<<endl;
-    cv::drawFrameAxes(detected_show, camera_matrix_, distortion_, v_rotation, v_translation, 0.1);
-    for(size_t r= 0; r < 3; r++){
-        for(size_t c = 0; c < 3; c++){
-            pose_se3(r, c) = rotation_mat.at<double>(r, c);
+    vector<geometry_msgs::TransformStamped> tfs;
+    for(int i = 0; i < target_id.size(); i++){
+        double marker_length = marker_info_map_[target_id[i]].first;
+        vector<vector<cv::Point2f>> corner;
+        corner.push_back(target_corner[i]);
+
+        vector<cv::Vec3d> v_rotation, v_translation;
+        cv::aruco::estimatePoseSingleMarkers(corner, marker_length, camera_matrix_, distortion_, v_rotation, v_translation);
+        cv::Mat rotation_mat;
+        Eigen::Matrix4d pose_se3 = Eigen::Matrix4d::Identity();
+        cv::Rodrigues(v_rotation[0], rotation_mat);
+        
+        cv::drawFrameAxes(detected_show, camera_matrix_, distortion_, v_rotation, v_translation, 0.1);
+        for(size_t r= 0; r < 3; r++){
+            for(size_t c = 0; c < 3; c++){
+                pose_se3(r, c) = rotation_mat.at<double>(r, c);
+            }
         }
+        pose_se3(0, 3) = v_translation[0](0);
+        pose_se3(1, 3) = v_translation[0](1);
+        pose_se3(2, 3) = v_translation[0](2);
+
+        //==================Testing tf================
+        Eigen::Quaterniond q(pose_se3.block<3, 3>(0, 0));
+        geometry_msgs::TransformStamped tf_msg;
+        tf_msg.header.stamp = ros::Time::now();
+        tf_msg.header.frame_id = "camera_optic";
+        tf_msg.child_frame_id = "marker" + to_string(target_id[i]);
+        tf_msg.transform.translation.x = pose_se3(0, 3);
+        tf_msg.transform.translation.y = pose_se3(1, 3);
+        tf_msg.transform.translation.z = pose_se3(2, 3);
+        tf_msg.transform.rotation.w = q.w();
+        tf_msg.transform.rotation.x = q.x();
+        tf_msg.transform.rotation.y = q.y();
+        tf_msg.transform.rotation.z = q.z();
+        tfs.push_back(tf_msg);
+        //====================================
     }
-    pose_se3(0, 3) = v_translation[0](0);
-    pose_se3(1, 3) = v_translation[0](1);
-    pose_se3(2, 3) = v_translation[0](2);
-
-    //==================Testing tf================
-    Eigen::Quaterniond q(pose_se3.block<3, 3>(0, 0));
-    geometry_msgs::TransformStamped tf_msg;
-    tf_msg.header.stamp = ros::Time::now();
-    tf_msg.header.frame_id = "camera_optic";
-    tf_msg.child_frame_id = "marker";
-    tf_msg.transform.translation.x = pose_se3(0, 3);
-    tf_msg.transform.translation.y = pose_se3(1, 3);
-    tf_msg.transform.translation.z = pose_se3(2, 3);
-    tf_msg.transform.rotation.w = q.w();
-    tf_msg.transform.rotation.x = q.x();
-    tf_msg.transform.rotation.y = q.y();
-    tf_msg.transform.rotation.z = q.z();
-
-    broadcaster_.sendTransform(tf_msg);
-    //============================================
-
+    
+    broadcaster_.sendTransform(tfs);
     cv::imshow("marker_detection", detected_show);
     cv::waitKey(3);
 }
