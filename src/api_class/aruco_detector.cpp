@@ -52,16 +52,17 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
         return;
     }
     cv::aruco::drawDetectedMarkers(detected_show, target_corner, target_id);
-    
+    double marker_length = 0.1;
     vector<cv::Vec3d> v_rotation, v_translation;
-    cv::aruco::estimatePoseSingleMarkers(target_corner, 0.1, camera_matrix_, distortion_, v_rotation, v_translation);
-    cout<<"RVEC: \n"<<v_rotation[0]<<endl;
-    cout<<"TVEC: \n"<<v_translation[0]<<endl;
+    cv::aruco::estimatePoseSingleMarkers(target_corner, marker_length, camera_matrix_, distortion_, v_rotation, v_translation);
+    // cout<<"RVEC: \n"<<v_rotation[0]<<endl;
+    // cout<<"TVEC: \n"<<v_translation[0]<<endl;
     cv::Mat rotation_mat;
     Eigen::Matrix4d pose_se3 = Eigen::Matrix4d::Identity();
     cv::Rodrigues(v_rotation[0], rotation_mat);
-    cout<<"ROTATION: \n"<<rotation_mat<<endl;
-    cout<<endl;
+    // cout<<"ROTATION: \n"<<rotation_mat<<endl;
+    // cout<<endl;
+    cout<<"DISTANCE: "<<sqrt(v_translation[0].dot(v_translation[0]))<<endl;
     cv::drawFrameAxes(detected_show, camera_matrix_, distortion_, v_rotation, v_translation, 0.1);
     for(size_t r= 0; r < 3; r++){
         for(size_t c = 0; c < 3; c++){
