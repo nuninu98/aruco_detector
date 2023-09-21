@@ -20,9 +20,10 @@ optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::
     distortion_.at<float>(0, 2) = -0.005782;
     distortion_.at<float>(0, 3) = 0.002051;
 
-    marker_info_map_.insert(make_pair(0, make_pair(0.1, Eigen::Vector4d::Identity())));
-    marker_info_map_.insert(make_pair(1, make_pair(0.05, Eigen::Vector4d::Identity())));
-    marker_info_map_.insert(make_pair(2, make_pair(0.05, Eigen::Vector4d::Identity())));
+    Eigen::Vector4d handle_in_marker(0.0, 0.0, 0.0, 1.0);
+    marker_info_map_.insert(make_pair(0, make_pair(0.1, handle_in_marker)));
+    marker_info_map_.insert(make_pair(1, make_pair(0.05, handle_in_marker)));
+    marker_info_map_.insert(make_pair(2, make_pair(0.05, handle_in_marker)));
 
     // optic_in_camera_(0, 2) = 1.0;
     // optic_in_camera_(1, 0) = -1.0;
@@ -68,7 +69,7 @@ optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::
         optic_in_camera_(2, 1) = -1.0;
         optic_in_camera_(2, 2) = 0.0;
     }
-    
+    pub_handle_pose_ = nh_.advertise<visualization_msgs::Marker>("handle_pose", 1);
     cout<<"CAMERA MAT: "<<camera_matrix_<<endl;
     cout<<"DISTORTION: "<<distortion_<<endl;
 }
@@ -116,6 +117,7 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
     tfs.push_back(tf_optic);
     //====================================================
 
+    Eigen::Vector4d handle_pose_in_cam(0.0, 0.0, 0.0, 1.0); // cam.inv * handle
     for(int i = 0; i < target_id.size(); i++){
         double marker_length = marker_info_map_[target_id[i]].first;
         vector<vector<cv::Point2f>> corner;
@@ -124,7 +126,7 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
         vector<cv::Vec3d> v_rotation, v_translation;
         cv::aruco::estimatePoseSingleMarkers(corner, marker_length, camera_matrix_, distortion_, v_rotation, v_translation);
         cv::Mat rotation_mat;
-        Eigen::Matrix4d pose_se3 = Eigen::Matrix4d::Identity();
+        Eigen::Matrix4d pose_se3 = Eigen::Matrix4d::Identity(); // cam_optic.inv * marker
         cv::Rodrigues(v_rotation[0], rotation_mat);
         
         cv::drawFrameAxes(detected_show, camera_matrix_, distortion_, v_rotation, v_translation, 0.1);
@@ -136,7 +138,10 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
         pose_se3(0, 3) = v_translation[0](0);
         pose_se3(1, 3) = v_translation[0](1);
         pose_se3(2, 3) = v_translation[0](2);
-
+        Eigen::Vector4d handle_in_marker = marker_info_map_[target_id[i]].second; //marker.inv * handle
+        Eigen::Vector4d handle_in_cam_optic = pose_se3 * handle_in_marker; // cam_optic.inv * marker
+        Eigen::Vector4d handle_in_cam = optic_in_camera_ * handle_in_cam_optic; 
+        handle_pose_in_cam += handle_in_cam;
         //==================Testing tf================
         Eigen::Quaterniond q(pose_se3.block<3, 3>(0, 0));
         geometry_msgs::TransformStamped tf_msg;
@@ -153,6 +158,26 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
         tfs.push_back(tf_msg);
         //====================================
     }
+    handle_pose_in_cam /= target_id.size();
+    //===========Testing handle position=========
+    visualization_msgs::Marker marker;
+    marker.header.frame_id = "rs_camera";
+    marker.header.stamp = ros::Time::now();
+    marker.lifetime = ros::Duration(0);
+    marker.type = visualization_msgs::Marker::SPHERE;
+    marker.color.a = 1.0;
+    marker.color.r = 255.0;
+    marker.scale.x = 0.1;
+    marker.scale.y = 0.1;
+    marker.scale.z = 0.1;
+    marker.pose.position.x = handle_pose_in_cam(0);
+    marker.pose.position.y = handle_pose_in_cam(1);
+    marker.pose.position.z = handle_pose_in_cam(2);
+    marker.pose.orientation.w = 1.0;
+    marker.pose.orientation.x = 0.0;
+    marker.pose.orientation.y = 0.0;
+    marker.pose.orientation.z = 0.0;
+    //===========================================
     
     broadcaster_.sendTransform(tfs);
     cv::imshow("marker_detection", detected_show);
