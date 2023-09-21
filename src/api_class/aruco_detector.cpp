@@ -2,7 +2,7 @@
 
 using namespace std;
 
-ArucoDetector::ArucoDetector(): queue_(), spinner_(0, &queue_){
+ArucoDetector::ArucoDetector(): queue_(), spinner_(0, &queue_), optic_in_camera_(Eigen::Matrix4d::Zero()),camera_in_robot_(Eigen::Matrix4d::Identity()){
     nh_.setCallbackQueue(&queue_);
     sub_image_ = nh_.subscribe("camera/color/image_raw", 1, &ArucoDetector::imageCallback, this);
     spinner_.start();
@@ -23,7 +23,6 @@ ArucoDetector::ArucoDetector(): queue_(), spinner_(0, &queue_){
     marker_info_map_.insert(make_pair(1, make_pair(0.05, Eigen::Vector4d::Identity())));
     marker_info_map_.insert(make_pair(2, make_pair(0.05, Eigen::Vector4d::Identity())));
 
-    optic_in_camera_ = Eigen::Matrix4d::Zero();
     optic_in_camera_(0, 2) = 1.0;
     optic_in_camera_(1, 0) = -1.0;
     optic_in_camera_(2, 1) = -1.0;

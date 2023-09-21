@@ -26,6 +26,7 @@ class ArucoDetector{
         unordered_map<int, pair<double, Eigen::Vector4d>> marker_info_map_; //id, size, handle position
         void imageCallback(const sensor_msgs::ImageConstPtr& image);
         Eigen::Matrix4d optic_in_camera_;
+        Eigen::Matrix4d camera_in_robot_;
         cv::Mat camera_matrix_; 
         cv::Mat distortion_;
         tf2_ros::TransformBroadcaster broadcaster_;
