@@ -22,8 +22,12 @@ optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::
 
     Eigen::Vector4d handle_in_marker(0.0, 0.0, 0.0, 1.0);
     marker_info_map_.insert(make_pair(0, make_pair(0.1, handle_in_marker)));
-    marker_info_map_.insert(make_pair(1, make_pair(0.05, handle_in_marker)));
-    marker_info_map_.insert(make_pair(2, make_pair(0.05, handle_in_marker)));
+    
+    handle_in_marker(0, 3) = 0.0575;
+    marker_info_map_.insert(make_pair(1, make_pair(0.045, handle_in_marker)));
+
+    handle_in_marker(0, 3) = -0.0575;
+    marker_info_map_.insert(make_pair(2, make_pair(0.045, handle_in_marker)));
 
     // optic_in_camera_(0, 2) = 1.0;
     // optic_in_camera_(1, 0) = -1.0;
@@ -105,9 +109,9 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
     tf_optic.header.frame_id = "rs_camera";
     tf_optic.header.stamp = ros::Time::now();
     tf_optic.child_frame_id = "camera_optic";
-    tf_optic.transform.translation.x = 0.0;
-    tf_optic.transform.translation.y = 0.0;
-    tf_optic.transform.translation.z = 0.0;
+    tf_optic.transform.translation.x = optic_in_camera_(0, 3);
+    tf_optic.transform.translation.y = optic_in_camera_(1, 3);
+    tf_optic.transform.translation.z = optic_in_camera_(2, 3);
 
     Eigen::Quaterniond optic_quat(optic_in_camera_.block<3, 3>(0, 0));
     tf_optic.transform.rotation.w = optic_quat.w();
@@ -117,7 +121,7 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
     tfs.push_back(tf_optic);
     //====================================================
 
-    Eigen::Vector4d handle_pose_in_cam(0.0, 0.0, 0.0, 1.0); // cam.inv * handle
+    Eigen::Vector4d handle_pose_in_cam(0.0, 0.0, 0.0, 0.0); // cam.inv * handle
     for(int i = 0; i < target_id.size(); i++){
         double marker_length = marker_info_map_[target_id[i]].first;
         vector<vector<cv::Point2f>> corner;
@@ -167,9 +171,9 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
     marker.type = visualization_msgs::Marker::SPHERE;
     marker.color.a = 1.0;
     marker.color.r = 255.0;
-    marker.scale.x = 0.1;
-    marker.scale.y = 0.1;
-    marker.scale.z = 0.1;
+    marker.scale.x = 0.01;
+    marker.scale.y = 0.01;
+    marker.scale.z = 0.01;
     marker.pose.position.x = handle_pose_in_cam(0);
     marker.pose.position.y = handle_pose_in_cam(1);
     marker.pose.position.z = handle_pose_in_cam(2);
@@ -178,7 +182,7 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
     marker.pose.orientation.y = 0.0;
     marker.pose.orientation.z = 0.0;
     //===========================================
-    
+    pub_handle_pose_.publish(marker);
     broadcaster_.sendTransform(tfs);
     cv::imshow("marker_detection", detected_show);
     cv::waitKey(3);
