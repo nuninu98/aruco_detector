@@ -19,9 +19,15 @@ ArucoDetector::ArucoDetector(): queue_(), spinner_(0, &queue_){
     distortion_.at<float>(0, 2) = -0.005782;
     distortion_.at<float>(0, 3) = 0.002051;
 
-    marker_info_map_.insert(make_pair(0, make_pair(0.1, Eigen::Matrix4d::Identity())));
-    marker_info_map_.insert(make_pair(1, make_pair(0.05, Eigen::Matrix4d::Identity())));
-    marker_info_map_.insert(make_pair(2, make_pair(0.05, Eigen::Matrix4d::Identity())));
+    marker_info_map_.insert(make_pair(0, make_pair(0.1, Eigen::Vector4d::Identity())));
+    marker_info_map_.insert(make_pair(1, make_pair(0.05, Eigen::Vector4d::Identity())));
+    marker_info_map_.insert(make_pair(2, make_pair(0.05, Eigen::Vector4d::Identity())));
+
+    optic_in_camera_ = Eigen::Matrix4d::Zero();
+    optic_in_camera_(0, 2) = 1.0;
+    optic_in_camera_(1, 0) = -1.0;
+    optic_in_camera_(2, 1) = -1.0;
+    optic_in_camera_(3, 3) = 1.0;
     
     cout<<"CAMERA MAT: "<<camera_matrix_<<endl;
     cout<<"DISTORTION: "<<distortion_<<endl;
@@ -57,6 +63,23 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
     }
     cv::aruco::drawDetectedMarkers(detected_show, target_corner, target_id);
     vector<geometry_msgs::TransformStamped> tfs;
+    //====================For Test=======================
+    geometry_msgs::TransformStamped tf_optic;
+    tf_optic.header.frame_id = "rs_camera";
+    tf_optic.header.stamp = ros::Time::now();
+    tf_optic.child_frame_id = "camera_optic";
+    tf_optic.transform.translation.x = 0.0;
+    tf_optic.transform.translation.y = 0.0;
+    tf_optic.transform.translation.z = 0.0;
+
+    Eigen::Quaterniond optic_quat(optic_in_camera_.block<3, 3>(0, 0));
+    tf_optic.transform.rotation.w = optic_quat.w();
+    tf_optic.transform.rotation.x = optic_quat.x();
+    tf_optic.transform.rotation.y = optic_quat.y();
+    tf_optic.transform.rotation.z = optic_quat.z();
+    tfs.push_back(tf_optic);
+    //====================================================
+
     for(int i = 0; i < target_id.size(); i++){
         double marker_length = marker_info_map_[target_id[i]].first;
         vector<vector<cv::Point2f>> corner;

@@ -19,14 +19,13 @@ using namespace std;
 
 class ArucoDetector{
     private:
-        int search_id_;
         ros::NodeHandle nh_;
         ros::Subscriber sub_image_;
         ros::CallbackQueue queue_;
         ros::AsyncSpinner spinner_;
-        unordered_map<int, pair<double, Eigen::Matrix4d>> marker_info_map_;
+        unordered_map<int, pair<double, Eigen::Vector4d>> marker_info_map_; //id, size, handle position
         void imageCallback(const sensor_msgs::ImageConstPtr& image);
-
+        Eigen::Matrix4d optic_in_camera_;
         cv::Mat camera_matrix_; 
         cv::Mat distortion_;
         tf2_ros::TransformBroadcaster broadcaster_;
