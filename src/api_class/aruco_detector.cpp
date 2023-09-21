@@ -24,10 +24,10 @@ optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::
     marker_info_map_.insert(make_pair(0, make_pair(0.1, handle_in_marker)));
     
     handle_in_marker(0, 3) = 0.0575;
-    marker_info_map_.insert(make_pair(1, make_pair(0.045, handle_in_marker)));
+    marker_info_map_.insert(make_pair(1, make_pair(0.05, handle_in_marker)));
 
     handle_in_marker(0, 3) = -0.0575;
-    marker_info_map_.insert(make_pair(2, make_pair(0.045, handle_in_marker)));
+    marker_info_map_.insert(make_pair(2, make_pair(0.05, handle_in_marker)));
 
     // optic_in_camera_(0, 2) = 1.0;
     // optic_in_camera_(1, 0) = -1.0;
