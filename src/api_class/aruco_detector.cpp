@@ -2,7 +2,8 @@
 
 using namespace std;
 
-ArucoDetector::ArucoDetector(): queue_(), spinner_(0, &queue_), optic_in_camera_(Eigen::Matrix4d::Zero()),camera_in_robot_(Eigen::Matrix4d::Identity()){
+ArucoDetector::ArucoDetector(): queue_(), spinner_(0, &queue_), listener_(buffer_),
+optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::Identity()){
     nh_.setCallbackQueue(&queue_);
     sub_image_ = nh_.subscribe("camera/color/image_raw", 1, &ArucoDetector::imageCallback, this);
     spinner_.start();
@@ -23,10 +24,50 @@ ArucoDetector::ArucoDetector(): queue_(), spinner_(0, &queue_), optic_in_camera_
     marker_info_map_.insert(make_pair(1, make_pair(0.05, Eigen::Vector4d::Identity())));
     marker_info_map_.insert(make_pair(2, make_pair(0.05, Eigen::Vector4d::Identity())));
 
-    optic_in_camera_(0, 2) = 1.0;
-    optic_in_camera_(1, 0) = -1.0;
-    optic_in_camera_(2, 1) = -1.0;
-    optic_in_camera_(3, 3) = 1.0;
+    // optic_in_camera_(0, 2) = 1.0;
+    // optic_in_camera_(1, 0) = -1.0;
+    // optic_in_camera_(2, 1) = -1.0;
+    // optic_in_camera_(3, 3) = 1.0;
+    ros::Time tic = ros::Time::now();
+    geometry_msgs::TransformStamped optic_tf;
+    optic_tf.header.stamp = ros::Time(0.0);
+    while((ros::Time::now() - tic).toSec() < 5.0){
+        try
+        {
+            optic_tf = buffer_.lookupTransform("camera_link", "camera_color_optical_frame", ros::Time::now());
+        }
+        catch(const std::exception& e)
+        {
+            optic_tf.header.stamp = ros::Time(0.0);
+        }
+        if(optic_tf.header.stamp != ros::Time(0.0)){
+            break;
+        }
+    }
+    if(optic_tf.header.stamp != ros::Time(0.0)){
+        ROS_INFO_STREAM("Got TF camera_link to camera_color_optical_frame");
+        optic_in_camera_(0, 3) = optic_tf.transform.translation.x;
+        optic_in_camera_(1, 3) = optic_tf.transform.translation.y;
+        optic_in_camera_(2, 3) = optic_tf.transform.translation.z;
+
+        Eigen::Quaterniond q(optic_tf.transform.rotation.w, optic_tf.transform.rotation.x, 
+        optic_tf.transform.rotation.y, optic_tf.transform.rotation.z);
+        optic_in_camera_.block<3, 3>(0, 0) = q.toRotationMatrix();
+    }
+    else{
+        ROS_WARN_STREAM("Failed to get transform camera_link to camera_color_optical_frame. Use Default");
+        optic_in_camera_(0, 0) = 0.0;
+        optic_in_camera_(0, 1) = 0.0;
+        optic_in_camera_(0, 2) = 1.0;
+
+        optic_in_camera_(1, 0) = -1.0;
+        optic_in_camera_(1, 1) = 0.0;
+        optic_in_camera_(1, 2) = 0.0;
+
+        optic_in_camera_(2, 0) = 0.0;
+        optic_in_camera_(2, 1) = -1.0;
+        optic_in_camera_(2, 2) = 0.0;
+    }
     
     cout<<"CAMERA MAT: "<<camera_matrix_<<endl;
     cout<<"DISTORTION: "<<distortion_<<endl;
@@ -52,12 +93,8 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
         }
     }
     if(target_corner.empty()){
-        // if(target_corner.empty()){
-        //     ROS_WARN_THROTTLE(1.0, "Tag ID "<< to_string(search_id_)<<" is not found");
-        // }
-        // else{
-        //     ROS_WARN_THROTTLE(1.0, "Tag ID "+ to_string(search_id_)+" is not found");
-        // }
+        cv::imshow("marker_detection", detected_show);
+        cv::waitKey(3);
         return;
     }
     cv::aruco::drawDetectedMarkers(detected_show, target_corner, target_id);
@@ -104,7 +141,7 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
         Eigen::Quaterniond q(pose_se3.block<3, 3>(0, 0));
         geometry_msgs::TransformStamped tf_msg;
         tf_msg.header.stamp = ros::Time::now();
-        tf_msg.header.frame_id = "camera_optic";
+        tf_msg.header.frame_id = "camera_color_optical_frame";
         tf_msg.child_frame_id = "marker" + to_string(target_id[i]);
         tf_msg.transform.translation.x = pose_se3(0, 3);
         tf_msg.transform.translation.y = pose_se3(1, 3);
