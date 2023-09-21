@@ -141,7 +141,7 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
         Eigen::Quaterniond q(pose_se3.block<3, 3>(0, 0));
         geometry_msgs::TransformStamped tf_msg;
         tf_msg.header.stamp = ros::Time::now();
-        tf_msg.header.frame_id = "camera_color_optical_frame";
+        tf_msg.header.frame_id = "camera_optic";
         tf_msg.child_frame_id = "marker" + to_string(target_id[i]);
         tf_msg.transform.translation.x = pose_se3(0, 3);
         tf_msg.transform.translation.y = pose_se3(1, 3);
