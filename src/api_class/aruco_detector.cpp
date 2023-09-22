@@ -106,7 +106,15 @@ optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::
     }
     else{
         ROS_WARN_STREAM("Failed to get transform base_link to camera_link. Use Default: Identity()");
+        camera_in_robot_(0, 3) = 0.221;
+        camera_in_robot_(1, 3) = 0.025;
+        camera_in_robot_(2, 3) = 0.0;
 
+        double yaw =-135.0 * (M_PI/180.0);
+        camera_in_robot_(0, 0) = cos(yaw);
+        camera_in_robot_(0, 1) = -sin(yaw);
+        camera_in_robot_(1, 0) = sin(yaw);
+        camera_in_robot_(1, 1) = cos(yaw);
     }
 
     pub_handle_vis_ = nh_.advertise<visualization_msgs::Marker>("handle_marker", 1);
