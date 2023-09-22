@@ -18,6 +18,7 @@
 #include <Eigen/Dense>
 #include <unordered_map>
 #include <visualization_msgs/MarkerArray.h>
+#include <geometry_msgs/PointStamped.h>
 using namespace std;
 
 class ArucoDetector{
@@ -28,17 +29,20 @@ class ArucoDetector{
         ros::AsyncSpinner spinner_;
         unordered_map<int, pair<double, Eigen::Vector4d>> marker_info_map_; //id, size, handle position
         void imageCallback(const sensor_msgs::ImageConstPtr& image);
+        bool got_camera_optic_tf_;
         Eigen::Matrix4d optic_in_camera_; // cam.inv * optic
+        bool got_camera_extrinsic_tf_;
         Eigen::Matrix4d camera_in_robot_;
         cv::Mat camera_matrix_; 
         cv::Mat distortion_;
         tf2_ros::TransformBroadcaster broadcaster_;
         tf2_ros::Buffer buffer_;
         tf2_ros::TransformListener listener_;
-
-        //==========For visualization=======
         ros::Publisher pub_handle_pose_;
+        //==========For visualization=======
+        ros::Publisher pub_handle_vis_;
         //==================================
+
     public:
         ArucoDetector();
 

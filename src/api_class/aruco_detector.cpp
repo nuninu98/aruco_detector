@@ -3,7 +3,7 @@
 using namespace std;
 
 ArucoDetector::ArucoDetector(): queue_(), spinner_(0, &queue_), listener_(buffer_),
-optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::Identity()){
+optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::Identity()), got_camera_optic_tf_(false), got_camera_extrinsic_tf_(false){
     nh_.setCallbackQueue(&queue_);
     sub_image_ = nh_.subscribe("camera/color/image_raw", 1, &ArucoDetector::imageCallback, this);
     spinner_.start();
@@ -23,10 +23,12 @@ optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::
     Eigen::Vector4d handle_in_marker(0.0, 0.0, 0.0, 1.0);
     marker_info_map_.insert(make_pair(0, make_pair(0.1, handle_in_marker)));
     
-    handle_in_marker(0, 3) = 0.0575;
+    handle_in_marker(0) = -0.185;
+    handle_in_marker(2) = 0.1;
     marker_info_map_.insert(make_pair(1, make_pair(0.05, handle_in_marker)));
 
-    handle_in_marker(0, 3) = -0.0575;
+    handle_in_marker(0) = 0.205;
+    handle_in_marker(2) = 0.1;
     marker_info_map_.insert(make_pair(2, make_pair(0.05, handle_in_marker)));
 
     // optic_in_camera_(0, 2) = 1.0;
@@ -34,12 +36,14 @@ optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::
     // optic_in_camera_(2, 1) = -1.0;
     // optic_in_camera_(3, 3) = 1.0;
     ros::Time tic = ros::Time::now();
-    geometry_msgs::TransformStamped optic_tf;
+    geometry_msgs::TransformStamped optic_tf, cam_extrinsic;
     optic_tf.header.stamp = ros::Time(0.0);
+    cam_extrinsic.header.stamp = ros::Time(0.0);
+    
     while((ros::Time::now() - tic).toSec() < 5.0){
         try
         {
-            optic_tf = buffer_.lookupTransform("camera_link", "camera_color_optical_frame", ros::Time::now());
+            optic_tf = buffer_.lookupTransform("camera_link", "camera_color_optical_frame", ros::Time::now());   
         }
         catch(const std::exception& e)
         {
@@ -49,7 +53,22 @@ optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::
             break;
         }
     }
+    tic = ros::Time::now();
+    while((ros::Time::now() - tic).toSec() < 5.0){
+        try
+        {
+            cam_extrinsic = buffer_.lookupTransform("base_link", "camera_link", ros::Time::now());
+        }
+        catch(const std::exception& e)
+        {
+            cam_extrinsic.header.stamp = ros::Time(0.0);
+        }
+        if(cam_extrinsic.header.stamp != ros::Time(0.0)){
+            break;
+        }
+    }
     if(optic_tf.header.stamp != ros::Time(0.0)){
+        got_camera_optic_tf_ = true;
         ROS_INFO_STREAM("Got TF camera_link to camera_color_optical_frame");
         optic_in_camera_(0, 3) = optic_tf.transform.translation.x;
         optic_in_camera_(1, 3) = optic_tf.transform.translation.y;
@@ -73,9 +92,25 @@ optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::
         optic_in_camera_(2, 1) = -1.0;
         optic_in_camera_(2, 2) = 0.0;
     }
-    pub_handle_pose_ = nh_.advertise<visualization_msgs::Marker>("handle_pose", 1);
-    cout<<"CAMERA MAT: "<<camera_matrix_<<endl;
-    cout<<"DISTORTION: "<<distortion_<<endl;
+
+    if(cam_extrinsic.header.stamp != ros::Time(0.0)){
+        got_camera_extrinsic_tf_ = true;
+        ROS_INFO_STREAM("Got TF base_link to camera_link");
+        camera_in_robot_(0, 3) = cam_extrinsic.transform.translation.x;
+        camera_in_robot_(1, 3) = cam_extrinsic.transform.translation.y;
+        camera_in_robot_(2, 3) = cam_extrinsic.transform.translation.z;
+
+        Eigen::Quaterniond q(cam_extrinsic.transform.rotation.w, cam_extrinsic.transform.rotation.x, 
+        cam_extrinsic.transform.rotation.y, cam_extrinsic.transform.rotation.z);
+        camera_in_robot_.block<3, 3>(0, 0) = q.toRotationMatrix();
+    }
+    else{
+        ROS_WARN_STREAM("Failed to get transform base_link to camera_link. Use Default: Identity()");
+
+    }
+
+    pub_handle_vis_ = nh_.advertise<visualization_msgs::Marker>("handle_marker", 1);
+    pub_handle_pose_ = nh_.advertise<geometry_msgs::Point>("handle_pose", 1);
 }
 
 ArucoDetector::~ArucoDetector(){
@@ -104,23 +139,38 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
     }
     cv::aruco::drawDetectedMarkers(detected_show, target_corner, target_id);
     vector<geometry_msgs::TransformStamped> tfs;
-    //====================For Test=======================
-    geometry_msgs::TransformStamped tf_optic;
-    tf_optic.header.frame_id = "rs_camera";
-    tf_optic.header.stamp = ros::Time::now();
-    tf_optic.child_frame_id = "camera_optic";
-    tf_optic.transform.translation.x = optic_in_camera_(0, 3);
-    tf_optic.transform.translation.y = optic_in_camera_(1, 3);
-    tf_optic.transform.translation.z = optic_in_camera_(2, 3);
+    if(!got_camera_optic_tf_){
+        geometry_msgs::TransformStamped tf_optic;
+        tf_optic.header.frame_id = "camera_link";
+        tf_optic.header.stamp = ros::Time::now();
+        tf_optic.child_frame_id = "camera_color_optical_frame";
+        tf_optic.transform.translation.x = optic_in_camera_(0, 3);
+        tf_optic.transform.translation.y = optic_in_camera_(1, 3);
+        tf_optic.transform.translation.z = optic_in_camera_(2, 3);
 
-    Eigen::Quaterniond optic_quat(optic_in_camera_.block<3, 3>(0, 0));
-    tf_optic.transform.rotation.w = optic_quat.w();
-    tf_optic.transform.rotation.x = optic_quat.x();
-    tf_optic.transform.rotation.y = optic_quat.y();
-    tf_optic.transform.rotation.z = optic_quat.z();
-    tfs.push_back(tf_optic);
-    //====================================================
+        Eigen::Quaterniond optic_quat(optic_in_camera_.block<3, 3>(0, 0));
+        tf_optic.transform.rotation.w = optic_quat.w();
+        tf_optic.transform.rotation.x = optic_quat.x();
+        tf_optic.transform.rotation.y = optic_quat.y();
+        tf_optic.transform.rotation.z = optic_quat.z();
+        tfs.push_back(tf_optic);
+    }
+    if(!got_camera_extrinsic_tf_){
+        geometry_msgs::TransformStamped tf_extrinsic;
+        tf_extrinsic.header.frame_id = "base_link";
+        tf_extrinsic.child_frame_id = "camera_link";
+        tf_extrinsic.header.stamp = ros::Time::now();
+        tf_extrinsic.transform.translation.x = camera_in_robot_(0, 3);
+        tf_extrinsic.transform.translation.y = camera_in_robot_(1, 3);
+        tf_extrinsic.transform.translation.z = camera_in_robot_(2, 3);
 
+        Eigen::Quaterniond extrinsic_quat(camera_in_robot_.block<3, 3>(0, 0));
+        tf_extrinsic.transform.rotation.w = extrinsic_quat.w();
+        tf_extrinsic.transform.rotation.x = extrinsic_quat.x();
+        tf_extrinsic.transform.rotation.y = extrinsic_quat.y();
+        tf_extrinsic.transform.rotation.z = extrinsic_quat.z();
+        tfs.push_back(tf_extrinsic);
+    }
     Eigen::Vector4d handle_pose_in_cam(0.0, 0.0, 0.0, 0.0); // cam.inv * handle
     for(int i = 0; i < target_id.size(); i++){
         double marker_length = marker_info_map_[target_id[i]].first;
@@ -150,7 +200,7 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
         Eigen::Quaterniond q(pose_se3.block<3, 3>(0, 0));
         geometry_msgs::TransformStamped tf_msg;
         tf_msg.header.stamp = ros::Time::now();
-        tf_msg.header.frame_id = "camera_optic";
+        tf_msg.header.frame_id = "camera_color_optical_frame";
         tf_msg.child_frame_id = "marker" + to_string(target_id[i]);
         tf_msg.transform.translation.x = pose_se3(0, 3);
         tf_msg.transform.translation.y = pose_se3(1, 3);
@@ -163,9 +213,11 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
         //====================================
     }
     handle_pose_in_cam /= target_id.size();
+
+    Eigen::Vector4d handle_pose_in_robot = camera_in_robot_ * handle_pose_in_cam;
     //===========Testing handle position=========
     visualization_msgs::Marker marker;
-    marker.header.frame_id = "rs_camera";
+    marker.header.frame_id = "base_link";
     marker.header.stamp = ros::Time::now();
     marker.lifetime = ros::Duration(0);
     marker.type = visualization_msgs::Marker::SPHERE;
@@ -174,15 +226,23 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
     marker.scale.x = 0.01;
     marker.scale.y = 0.01;
     marker.scale.z = 0.01;
-    marker.pose.position.x = handle_pose_in_cam(0);
-    marker.pose.position.y = handle_pose_in_cam(1);
-    marker.pose.position.z = handle_pose_in_cam(2);
+    marker.pose.position.x = handle_pose_in_robot(0);
+    marker.pose.position.y = handle_pose_in_robot(1);
+    marker.pose.position.z = handle_pose_in_robot(2);
     marker.pose.orientation.w = 1.0;
     marker.pose.orientation.x = 0.0;
     marker.pose.orientation.y = 0.0;
     marker.pose.orientation.z = 0.0;
     //===========================================
-    pub_handle_pose_.publish(marker);
+    pub_handle_vis_.publish(marker);
+
+    geometry_msgs::PointStamped marker_pose_msg;
+    marker_pose_msg.header.frame_id = "base_link";
+    marker_pose_msg.header.stamp = ros::Time::now();
+    marker_pose_msg.point.x = handle_pose_in_robot(0);
+    marker_pose_msg.point.y = handle_pose_in_robot(1);
+    marker_pose_msg.point.z = handle_pose_in_robot(2);
+    pub_handle_pose_.publish(marker_pose_msg);
     broadcaster_.sendTransform(tfs);
     cv::imshow("marker_detection", detected_show);
     cv::waitKey(3);
