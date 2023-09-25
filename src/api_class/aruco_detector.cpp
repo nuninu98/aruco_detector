@@ -2,11 +2,10 @@
 
 using namespace std;
 
-ArucoDetector::ArucoDetector(): queue_(), spinner_(0, &queue_), listener_(buffer_),
+ArucoDetector::ArucoDetector(): queue_(), spinner_(0, &queue_), listener_(buffer_), depth_in_optic_(Eigen::Matrix4d::Identity()),
 optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::Identity()), got_camera_optic_tf_(false), got_camera_extrinsic_tf_(false){
     nh_.setCallbackQueue(&queue_);
     sub_image_ = nh_.subscribe("camera/color/image_raw", 1, &ArucoDetector::imageCallback, this);
-    spinner_.start();
     
     camera_matrix_ = cv::Mat::eye(3, 3, CV_32FC1);
     camera_matrix_.at<float>(0, 0) = 932.24106;
@@ -117,9 +116,41 @@ optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::
         camera_in_robot_(1, 1) = cos(yaw);
     }
 
+    tic = ros::Time::now();
+    geometry_msgs::TransformStamped depth_to_optic;
+    while((ros::Time::now() - tic).toSec() < 5.0){
+        try
+        {
+            depth_to_optic = buffer_.lookupTransform("camera_color_optical_frame", "camera_depth_frame", ros::Time::now());
+        }
+        catch(const std::exception& e)
+        {
+            depth_to_optic.header.stamp = ros::Time(0.0);
+        }
+        if(depth_to_optic.header.stamp != ros::Time(0.0)){
+            break;
+        }
+    }
+
+    if(depth_to_optic.header.stamp != ros::Time(0.0)){
+        ROS_INFO_STREAM("Got TF camera_color_optical_frame to camera_depth_frame");
+        depth_in_optic_(0, 3) = depth_to_optic.transform.translation.x;
+        depth_in_optic_(1, 3) = depth_to_optic.transform.translation.y;
+        depth_in_optic_(2, 3) = depth_to_optic.transform.translation.z;
+
+        Eigen::Quaterniond q(depth_to_optic.transform.rotation.w, depth_to_optic.transform.rotation.x, 
+        depth_to_optic.transform.rotation.y, depth_to_optic.transform.rotation.z);
+        depth_in_optic_.block<3, 3>(0, 0) = q.toRotationMatrix();
+    }
+    else{
+        ROS_WARN_STREAM("Failed to get transform camera_color_optical_frame to camera_depth_frame. Use Default: Identity()");
+    }
+    pub_marker_points_ = nh_.advertise<sensor_msgs::PointCloud2>("marker_point", 1);
     pub_handle_vis_ = nh_.advertise<visualization_msgs::Marker>("handle_marker", 1);
-    pub_handle_pose_ = nh_.advertise<geometry_msgs::Point>("handle_pose", 1);
-}
+    pub_handle_pose_ = nh_.advertise<geometry_msgs::PointStamped>("handle_pose", 1);
+    sub_depth_points_ = nh_.subscribe("depth_topic", 1, &ArucoDetector::pointCloudCallback, this);
+    spinner_.start();
+}   
 
 ArucoDetector::~ArucoDetector(){
     spinner_.stop();
@@ -179,6 +210,8 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
         tf_extrinsic.transform.rotation.z = extrinsic_quat.z();
         tfs.push_back(tf_extrinsic);
     }
+    pcl::PointCloud<pcl::PointXYZRGB> marker_cloud;
+
     Eigen::Vector4d handle_pose_in_cam(0.0, 0.0, 0.0, 0.0); // cam.inv * handle
     for(int i = 0; i < target_id.size(); i++){
         double marker_length = marker_info_map_[target_id[i]].first;
@@ -197,6 +230,26 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
                 pose_se3(r, c) = rotation_mat.at<double>(r, c);
             }
         }
+
+        //=====================Extract marker cloud=================
+        lock_.lock();
+        for(const auto& pt : depth_cloud_optic_){
+            cv::Mat pt_vec = cv::Mat::zeros(3, 1, CV_32F);
+            pt_vec.at<float>(0, 0) = pt.x;
+            pt_vec.at<float>(1, 0) = pt.y;
+            pt_vec.at<float>(2, 0) = pt.z;
+
+            cv::Mat pixel_coord = camera_matrix_ *pt_vec;
+            pixel_coord = pixel_coord / pixel_coord.at<float>(2, 0); // normalize
+
+            cv::Point2f pixel_point(pixel_coord.at<float>(0, 0), pixel_coord.at<float>(1, 0));
+            cv::Rect2f marker_rect(target_corner[i][0], target_corner[i][2]);
+            if(marker_rect.contains(pixel_point)){
+                marker_cloud.push_back(pt);
+            }
+        }
+        lock_.unlock();
+        //===========================================================
         pose_se3(0, 3) = v_translation[0](0);
         pose_se3(1, 3) = v_translation[0](1);
         pose_se3(2, 3) = v_translation[0](2);
@@ -220,6 +273,12 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
         tfs.push_back(tf_msg);
         //====================================
     }
+    sensor_msgs::PointCloud2 marker_cloud_ros;
+    pcl::toROSMsg(marker_cloud, marker_cloud_ros);
+    marker_cloud_ros.header.frame_id = "camera_color_optical_frame";
+    marker_cloud_ros.header.stamp = ros::Time::now();
+    pub_marker_points_.publish(marker_cloud_ros);
+
     handle_pose_in_cam /= target_id.size();
 
     Eigen::Vector4d handle_pose_in_robot = camera_in_robot_ * handle_pose_in_cam;
@@ -254,4 +313,12 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
     broadcaster_.sendTransform(tfs);
     cv::imshow("marker_detection", detected_show);
     cv::waitKey(3);
+}
+
+void ArucoDetector::pointCloudCallback(const sensor_msgs::PointCloud2ConstPtr& cloud){
+    unique_lock<mutex> lock(lock_);
+    pcl::PointCloud<pcl::PointXYZRGB> depth_cloud;
+    pcl::fromROSMsg(*cloud, depth_cloud);
+    pcl::transformPointCloud(depth_cloud, depth_cloud_optic_, depth_in_optic_);
+    
 }

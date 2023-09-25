@@ -3,6 +3,7 @@
 
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
+#include <sensor_msgs/PointCloud2.h>
 #include <iostream>
 #include <ros/callback_queue.h>
 #include <ros/spinner.h>
@@ -19,6 +20,10 @@
 #include <unordered_map>
 #include <visualization_msgs/MarkerArray.h>
 #include <geometry_msgs/PointStamped.h>
+#include <pcl/common/common.h>
+#include <pcl_conversions/pcl_conversions.h>
+#include <pcl/conversions.h>
+#include <pcl/common/transforms.h>
 using namespace std;
 
 class ArucoDetector{
@@ -42,7 +47,13 @@ class ArucoDetector{
         //==========For visualization=======
         ros::Publisher pub_handle_vis_;
         //==================================
-
+        ros::Subscriber sub_depth_points_;
+        Eigen::Matrix4d depth_in_optic_;
+        pcl::PointCloud<pcl::PointXYZRGB> depth_cloud_optic_;
+        ros::Publisher pub_marker_points_;
+        void pointCloudCallback(const sensor_msgs::PointCloud2ConstPtr& depth_cloud);
+    
+        mutex lock_;
     public:
         ArucoDetector();
 
