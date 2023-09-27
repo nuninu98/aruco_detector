@@ -5,7 +5,6 @@ using namespace std;
 ArucoDetector::ArucoDetector(): queue_(), spinner_(0, &queue_), listener_(buffer_), depth_in_optic_(Eigen::Matrix4d::Identity()),
 optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::Identity()), got_camera_optic_tf_(false), got_camera_extrinsic_tf_(false){
     nh_.setCallbackQueue(&queue_);
-    sub_image_ = nh_.subscribe("camera/color/image_raw", 1, &ArucoDetector::imageCallback, this);
     
     camera_matrix_ = cv::Mat::eye(3, 3, CV_32FC1);
     camera_matrix_.at<float>(0, 0) = 932.24106;
@@ -26,9 +25,9 @@ optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::
     handle_in_marker(2) = 0.1;
     marker_info_map_.insert(make_pair(1, make_pair(0.05, handle_in_marker)));
 
-    handle_in_marker(0) = 0.205;
-    handle_in_marker(2) = 0.1;
-    marker_info_map_.insert(make_pair(2, make_pair(0.05, handle_in_marker)));
+    handle_in_marker(0) = 0.2;
+    handle_in_marker(2) = 0.01;
+    marker_info_map_.insert(make_pair(2, make_pair(0.08, handle_in_marker)));
 
     // optic_in_camera_(0, 2) = 1.0;
     // optic_in_camera_(1, 0) = -1.0;
@@ -105,15 +104,15 @@ optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::
     }
     else{
         ROS_WARN_STREAM("Failed to get transform base_link to camera_link. Use Default: Identity()");
-        camera_in_robot_(0, 3) = 0.221;
-        camera_in_robot_(1, 3) = 0.025;
-        camera_in_robot_(2, 3) = 0.0;
-
-        double yaw =-135.0 * (M_PI/180.0);
-        camera_in_robot_(0, 0) = cos(yaw);
-        camera_in_robot_(0, 1) = -sin(yaw);
-        camera_in_robot_(1, 0) = sin(yaw);
-        camera_in_robot_(1, 1) = cos(yaw);
+        Eigen::Matrix4d robot_in_cam = Eigen::Matrix4d::Identity();
+        double yaw = 135.0 * (M_PI/180.0);
+        robot_in_cam(0, 3) = -0.14;
+        robot_in_cam(1, 3) = 0.0; //-0.02;
+        robot_in_cam(0, 0) = cos(yaw);
+        robot_in_cam(0, 1) = -sin(yaw);
+        robot_in_cam(1, 0) = sin(yaw);
+        robot_in_cam(1, 1) = cos(yaw);
+        camera_in_robot_ = robot_in_cam.inverse();
     }
 
     tic = ros::Time::now();
@@ -121,7 +120,7 @@ optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::
     while((ros::Time::now() - tic).toSec() < 5.0){
         try
         {
-            depth_to_optic = buffer_.lookupTransform("camera_color_optical_frame", "camera_depth_frame", ros::Time::now());
+            depth_to_optic = buffer_.lookupTransform("camera_color_optical_frame", "camera_depth_optical_frame", ros::Time::now());
         }
         catch(const std::exception& e)
         {
@@ -148,7 +147,9 @@ optic_in_camera_(Eigen::Matrix4d::Identity()),camera_in_robot_(Eigen::Matrix4d::
     pub_marker_points_ = nh_.advertise<sensor_msgs::PointCloud2>("marker_point", 1);
     pub_handle_vis_ = nh_.advertise<visualization_msgs::Marker>("handle_marker", 1);
     pub_handle_pose_ = nh_.advertise<geometry_msgs::PointStamped>("handle_pose", 1);
-    sub_depth_points_ = nh_.subscribe("depth_topic", 1, &ArucoDetector::pointCloudCallback, this);
+    sub_depth_points_ = nh_.subscribe("camera/depth/color/points", 1, &ArucoDetector::pointCloudCallback, this);
+    sub_image_ = nh_.subscribe("camera/color/image_raw", 1, &ArucoDetector::imageCallback, this);
+
     spinner_.start();
 }   
 
@@ -210,10 +211,12 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
         tf_extrinsic.transform.rotation.z = extrinsic_quat.z();
         tfs.push_back(tf_extrinsic);
     }
-    pcl::PointCloud<pcl::PointXYZRGB> marker_cloud;
+    pcl::PointCloud<pcl::PointXYZRGB> marker_cloud_sum;
 
     Eigen::Vector4d handle_pose_in_cam(0.0, 0.0, 0.0, 0.0); // cam.inv * handle
     for(int i = 0; i < target_id.size(); i++){
+        pcl::PointCloud<pcl::PointXYZRGB> marker_cloud;
+
         double marker_length = marker_info_map_[target_id[i]].first;
         vector<vector<cv::Point2f>> corner;
         corner.push_back(target_corner[i]);
@@ -233,6 +236,8 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
 
         //=====================Extract marker cloud=================
         lock_.lock();
+        cv::Rect2f marker_rect(target_corner[i][0], target_corner[i][2]);
+        cv::Mat marker_center = cv::Mat::zeros(3, 1, CV_32F);
         for(const auto& pt : depth_cloud_optic_){
             cv::Mat pt_vec = cv::Mat::zeros(3, 1, CV_32F);
             pt_vec.at<float>(0, 0) = pt.x;
@@ -243,16 +248,29 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
             pixel_coord = pixel_coord / pixel_coord.at<float>(2, 0); // normalize
 
             cv::Point2f pixel_point(pixel_coord.at<float>(0, 0), pixel_coord.at<float>(1, 0));
-            cv::Rect2f marker_rect(target_corner[i][0], target_corner[i][2]);
             if(marker_rect.contains(pixel_point)){
                 marker_cloud.push_back(pt);
             }
         }
+
+        for(const auto& pt: marker_cloud){
+            cv::Mat pt_vec = cv::Mat::zeros(3, 1, CV_32F);
+            pt_vec.at<float>(0, 0) = pt.x;
+            pt_vec.at<float>(1, 0) = pt.y;
+            pt_vec.at<float>(2, 0) = pt.z;
+            marker_center += (pt_vec / marker_cloud.size());
+
+        }
+        marker_cloud_sum += marker_cloud;
         lock_.unlock();
         //===========================================================
-        pose_se3(0, 3) = v_translation[0](0);
-        pose_se3(1, 3) = v_translation[0](1);
-        pose_se3(2, 3) = v_translation[0](2);
+        //cv::Vec3d trans = v_translation[0];
+        // pose_se3(0, 3) = v_translation[0](0);
+        // pose_se3(1, 3) = v_translation[0](1);
+        // pose_se3(2, 3) = v_translation[0](2);
+        pose_se3(0, 3) = marker_center.at<float>(0, 0);
+        pose_se3(1, 3) = marker_center.at<float>(1, 0);
+        pose_se3(2, 3) = marker_center.at<float>(2, 0);
         Eigen::Vector4d handle_in_marker = marker_info_map_[target_id[i]].second; //marker.inv * handle
         Eigen::Vector4d handle_in_cam_optic = pose_se3 * handle_in_marker; // cam_optic.inv * marker
         Eigen::Vector4d handle_in_cam = optic_in_camera_ * handle_in_cam_optic; 
@@ -274,7 +292,7 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
         //====================================
     }
     sensor_msgs::PointCloud2 marker_cloud_ros;
-    pcl::toROSMsg(marker_cloud, marker_cloud_ros);
+    pcl::toROSMsg(marker_cloud_sum, marker_cloud_ros);
     marker_cloud_ros.header.frame_id = "camera_color_optical_frame";
     marker_cloud_ros.header.stamp = ros::Time::now();
     pub_marker_points_.publish(marker_cloud_ros);
@@ -317,6 +335,7 @@ void ArucoDetector::imageCallback(const sensor_msgs::ImageConstPtr& image){
 
 void ArucoDetector::pointCloudCallback(const sensor_msgs::PointCloud2ConstPtr& cloud){
     unique_lock<mutex> lock(lock_);
+    depth_cloud_optic_.clear();
     pcl::PointCloud<pcl::PointXYZRGB> depth_cloud;
     pcl::fromROSMsg(*cloud, depth_cloud);
     pcl::transformPointCloud(depth_cloud, depth_cloud_optic_, depth_in_optic_);
